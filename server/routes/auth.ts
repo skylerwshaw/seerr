@@ -1,4 +1,4 @@
-import JellyfinAPI from '@server/api/jellyfin';
+import JellyfinAPI, { type JellyfinUserResponse } from '@server/api/jellyfin';
 import PlexTvAPI from '@server/api/plextv';
 import { ApiErrorCode } from '@server/constants/error';
 import { MediaServerType, ServerType } from '@server/constants/server';
@@ -32,6 +32,121 @@ export const quickConnectSecret = z.object({
     .max(128)
     .regex(/^[A-Fa-f0-9]+$/),
 });
+
+/**
+ * Sets a Seerr user's Jellyfin/Emby identity fields and persists them.
+ * Shared by every flow that links a Seerr account to a media-server
+ * account: Quick Connect (an already-known Jellyfin user id from Quick
+ * Connect's code-approval exchange) and OIDC auto-link at signup (an
+ * already-known Jellyfin user id resolved by preferred_username).
+ */
+export async function linkJellyfinAccount(
+  user: User,
+  jellyfinUser: Pick<JellyfinUserResponse, 'Id' | 'Name'>,
+  session?: { authToken: string; deviceId: string }
+): Promise<void> {
+  const settings = getSettings();
+
+  user.userType =
+    settings.main.mediaServerType === MediaServerType.EMBY
+      ? UserType.EMBY
+      : UserType.JELLYFIN;
+  user.jellyfinUserId = jellyfinUser.Id;
+  user.jellyfinUsername = jellyfinUser.Name;
+  if (session) {
+    user.jellyfinAuthToken = session.authToken;
+    user.jellyfinDeviceId = session.deviceId;
+  }
+
+  await getRepository(User).save(user);
+}
+
+/**
+ * Auto-links a newly created OIDC user to their Jellyfin account by
+ * preferred_username, mirroring what the manual Quick Connect linking flow
+ * does (docs/auth.md) but skipping the user-initiated code-approval step.
+ * The match key is preferred_username: Jellyfin's SSO plugin sets
+ * defaultUsernameClaim to that same claim, so no extra plumbing is needed
+ * to cross-reference identities.
+ *
+ * Jellyfin's SSO plugin only provisions an account lazily, on that user's
+ * first Jellyfin login. If Seerr is their first stop, there's no Jellyfin
+ * account yet to match -- fail gracefully and leave the manual Quick
+ * Connect flow as the fallback.
+ *
+ * No backfill needed once linked: the Jellyfin Enhanced plugin proxies
+ * every Seerr call live, server-side, per request (it's not a batch job
+ * reading a cached snapshot), so setting jellyfinUserId here is enough --
+ * the linked/unlinked check and watch-history-driven recommendations both
+ * start working prospectively the same way they do after a manual Quick
+ * Connect link.
+ */
+async function autoLinkJellyfinAccount(
+  user: User,
+  preferredUsername: string
+): Promise<void> {
+  const settings = getSettings();
+
+  if (settings.main.mediaServerType !== MediaServerType.JELLYFIN) {
+    return;
+  }
+
+  try {
+    const userRepository = getRepository(User);
+    const admin = await userRepository.findOneOrFail({
+      where: { id: 1 },
+      select: ['id', 'jellyfinDeviceId', 'jellyfinUserId'],
+      order: { id: 'ASC' },
+    });
+
+    const jellyfinClient = new JellyfinAPI(
+      getHostname(),
+      settings.jellyfin.apiKey,
+      admin.jellyfinDeviceId ?? ''
+    );
+    jellyfinClient.setUserId(admin.jellyfinUserId ?? '');
+
+    const { users } = await jellyfinClient.getUsers();
+    const jellyfinUser = users.find((u) => u.Name === preferredUsername);
+
+    if (!jellyfinUser) {
+      logger.info(
+        'No Jellyfin account found matching preferred_username yet; leaving new user unlinked',
+        { label: 'Auth', userId: user.id, preferredUsername }
+      );
+      return;
+    }
+
+    if (
+      await userRepository.exist({
+        where: { jellyfinUserId: jellyfinUser.Id },
+      })
+    ) {
+      logger.warn(
+        'Jellyfin account is already linked to a different Seerr user; skipping auto-link',
+        { label: 'Auth', userId: user.id, jellyfinUserId: jellyfinUser.Id }
+      );
+      return;
+    }
+
+    await linkJellyfinAccount(user, jellyfinUser);
+
+    logger.info('Auto-linked new user to their Jellyfin account', {
+      label: 'Auth',
+      userId: user.id,
+      jellyfinUserId: jellyfinUser.Id,
+    });
+  } catch (error) {
+    logger.error(
+      'Failed to auto-link new user to a Jellyfin account; leaving unlinked',
+      {
+        label: 'Auth',
+        userId: user.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    );
+  }
+}
 
 authRoutes.get('/me', isAuthenticated(), async (req, res) => {
   const userRepository = getRepository(User);
@@ -1216,6 +1331,10 @@ authRoutes.post(
 
       user.linkedAccounts = [linkedAccount];
       await userRepository.save(user);
+
+      if (fullUserInfo.preferred_username) {
+        await autoLinkJellyfinAccount(user, fullUserInfo.preferred_username);
+      }
     }
 
     if (!user) {

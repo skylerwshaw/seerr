@@ -79,6 +79,14 @@ const authenticateQCMock = mock.method(
   async () => ({ ...defaultAuthenticateResponse })
 );
 
+const getUsersMock = mock.method(
+  JellyfinAPI.prototype,
+  'getUsers',
+  async () => ({
+    users: [],
+  })
+);
+
 let app: Express;
 
 function createApp() {
@@ -1179,6 +1187,141 @@ describe('OpenID Connect', () => {
 
       assert.strictEqual(response.status, 400);
       assert.strictEqual(response.body.error, ApiErrorCode.OidcMissingEmail);
+    });
+  });
+
+  describe('auto-link to Jellyfin at signup', function () {
+    const JELLYFIN_CLAIMS = {
+      sub: 'jellyfin-linkable-sub',
+      email: 'jellyfinlinkable@example.com',
+      preferred_username: 'jellyfinlinkable',
+    };
+
+    beforeEach(async () => {
+      const settings = getSettings();
+      settings.oidc.providers[0].newUserLogin = true;
+      settings.main.mediaServerType = MediaServerType.JELLYFIN;
+      settings.jellyfin.apiKey = 'test-api-key';
+
+      getUsersMock.mock.resetCalls();
+      getUsersMock.mock.mockImplementation(async () => ({ users: [] }));
+
+      await setupFetchMock({
+        supportsPKCE: false,
+        idTokenClaims: JELLYFIN_CLAIMS,
+        userinfoResponse: JELLYFIN_CLAIMS,
+      });
+    });
+
+    afterEach(() => {
+      fetchMock.hardReset();
+    });
+
+    it('links the new user to the matching Jellyfin account', async function () {
+      getUsersMock.mock.mockImplementation(async () => ({
+        users: [
+          {
+            Id: 'jf-auto-link-001',
+            Name: 'jellyfinlinkable',
+            ServerId: 'server-1',
+            ServerName: 'Test Server',
+            Configuration: { GroupedFolders: [] },
+            Policy: { IsAdministrator: false },
+          },
+        ],
+      }));
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+
+      const userRepo = getRepository(User);
+      const createdUser = await userRepo.findOneOrFail({
+        where: { email: JELLYFIN_CLAIMS.email },
+        select: ['id', 'userType', 'jellyfinUserId', 'jellyfinUsername'],
+      });
+      assert.strictEqual(createdUser.jellyfinUserId, 'jf-auto-link-001');
+      assert.strictEqual(createdUser.jellyfinUsername, 'jellyfinlinkable');
+      assert.strictEqual(createdUser.userType, UserType.JELLYFIN);
+    });
+
+    it('leaves the new user unlinked when no matching Jellyfin account exists yet', async function () {
+      // getUsersMock defaults to returning no users (not yet provisioned)
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+
+      const userRepo = getRepository(User);
+      const createdUser = await userRepo.findOneOrFail({
+        where: { email: JELLYFIN_CLAIMS.email },
+        select: ['id', 'userType', 'jellyfinUserId'],
+      });
+      assert.strictEqual(createdUser.jellyfinUserId, null);
+      assert.strictEqual(createdUser.userType, UserType.LOCAL);
+    });
+
+    it('leaves the new user unlinked when the Jellyfin lookup fails', async function () {
+      getUsersMock.mock.mockImplementation(async () => {
+        throw new Error('Jellyfin unreachable');
+      });
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+
+      const userRepo = getRepository(User);
+      const createdUser = await userRepo.findOneOrFail({
+        where: { email: JELLYFIN_CLAIMS.email },
+        select: ['id', 'jellyfinUserId'],
+      });
+      assert.strictEqual(createdUser.jellyfinUserId, null);
+    });
+
+    it('does not steal a Jellyfin account already linked to a different Seerr user', async function () {
+      const userRepo = getRepository(User);
+      await userRepo.save(
+        new User({
+          email: 'already-linked@seerr.dev',
+          jellyfinUsername: 'jellyfinlinkable',
+          jellyfinUserId: 'jf-auto-link-001',
+          permissions: 0,
+          avatar: '/avatarproxy/jf-auto-link-001',
+          userType: UserType.JELLYFIN,
+        })
+      );
+
+      getUsersMock.mock.mockImplementation(async () => ({
+        users: [
+          {
+            Id: 'jf-auto-link-001',
+            Name: 'jellyfinlinkable',
+            ServerId: 'server-1',
+            ServerName: 'Test Server',
+            Configuration: { GroupedFolders: [] },
+            Policy: { IsAdministrator: false },
+          },
+        ],
+      }));
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+
+      const createdUser = await userRepo.findOneOrFail({
+        where: { email: JELLYFIN_CLAIMS.email },
+        select: ['id', 'jellyfinUserId'],
+      });
+      assert.strictEqual(createdUser.jellyfinUserId, null);
+    });
+
+    it('does not attempt to link when the media server is not Jellyfin', async function () {
+      const settings = getSettings();
+      settings.main.mediaServerType = MediaServerType.PLEX;
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+      assert.strictEqual(getUsersMock.mock.callCount(), 0);
     });
   });
 
