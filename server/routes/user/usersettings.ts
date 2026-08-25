@@ -17,7 +17,7 @@ import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { isAuthenticated } from '@server/middleware/auth';
-import { quickConnectSecret } from '@server/routes/auth';
+import { linkJellyfinAccount, quickConnectSecret } from '@server/routes/auth';
 import { ApiError } from '@server/types/error';
 import { getHostname } from '@server/utils/getHostname';
 import {
@@ -576,12 +576,10 @@ userSettingsRoutes.post<{ secret: string }>(
         user.id === 1 ? 'BOT_seerr' : `BOT_seerr_${user.username ?? ''}`
       ).toString('base64');
 
-      user.userType = UserType.JELLYFIN;
-      user.jellyfinUserId = account.User.Id;
-      user.jellyfinUsername = account.User.Name;
-      user.jellyfinAuthToken = account.AccessToken;
-      user.jellyfinDeviceId = deviceId;
-      await userRepository.save(user);
+      await linkJellyfinAccount(user, account.User, {
+        authToken: account.AccessToken,
+        deviceId,
+      });
 
       return res.status(204).send();
     } catch (e) {
