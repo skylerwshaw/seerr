@@ -963,10 +963,10 @@ describe('OpenID Connect', () => {
     email: 'newuser@example.com',
   };
 
-  // Claims for existing seeded user (friend@seerr.dev)
+  // Claims for existing seeded user (demo@seerr.dev)
   const EXISTING_USER_CLAIMS = {
-    sub: 'friend-oidc-sub',
-    email: 'friend@seerr.dev',
+    sub: 'demo-oidc-sub',
+    email: 'demo@seerr.dev',
   };
 
   function buildMockWellKnown(options?: { supportsPKCE?: boolean }) {
@@ -1132,12 +1132,12 @@ describe('OpenID Connect', () => {
     });
 
     it('callback endpoint successfully authorizes existing user', async function () {
-      // Link the seeded friend user to the OIDC provider
+      // Link the seeded demo user to the OIDC provider
       const userRepo = getRepository(User);
       const linkedAccountRepo = getRepository(LinkedAccount);
 
       const user = await userRepo.findOneOrFail({
-        where: { email: 'friend@seerr.dev' },
+        where: { email: 'demo@seerr.dev' },
       });
 
       const linkedAccount = new LinkedAccount({
@@ -1187,12 +1187,12 @@ describe('OpenID Connect', () => {
     });
 
     it('callback endpoint successfully authorizes existing user', async function () {
-      // Link the seeded friend user to the OIDC provider
+      // Link the seeded demo user to the OIDC provider
       const userRepo = getRepository(User);
       const linkedAccountRepo = getRepository(LinkedAccount);
 
       const user = await userRepo.findOneOrFail({
-        where: { email: 'friend@seerr.dev' },
+        where: { email: 'demo@seerr.dev' },
       });
 
       const linkedAccount = new LinkedAccount({
