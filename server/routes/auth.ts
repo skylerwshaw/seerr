@@ -62,6 +62,67 @@ export async function linkJellyfinAccount(
 }
 
 /**
+ * Looks up a Jellyfin account by name, using the admin's Jellyfin client.
+ * Throws if Jellyfin can't be reached.
+ */
+async function findJellyfinUserByName(
+  name: string
+): Promise<JellyfinUserResponse | undefined> {
+  const settings = getSettings();
+  const admin = await getRepository(User).findOneOrFail({
+    where: { id: 1 },
+    select: ['id', 'jellyfinDeviceId', 'jellyfinUserId'],
+    order: { id: 'ASC' },
+  });
+
+  const jellyfinClient = new JellyfinAPI(
+    getHostname(),
+    settings.jellyfin.apiKey,
+    admin.jellyfinDeviceId ?? ''
+  );
+  jellyfinClient.setUserId(admin.jellyfinUserId ?? '');
+
+  const { users } = await jellyfinClient.getUsers();
+  return users.find((u) => u.Name === name);
+}
+
+/**
+ * Finds the existing Seerr user that already owns the Jellyfin account
+ * matching preferred_username, e.g. one created by a plain Jellyfin login
+ * before OIDC was turned on. Signing in with OIDC should land on that
+ * account rather than create a duplicate. Trusting preferred_username here
+ * is the same trust Jellyfin's SSO plugin already places in it to pick the
+ * Jellyfin account at login.
+ */
+async function findUserByJellyfinUsername(
+  preferredUsername: string
+): Promise<User | null> {
+  if (getSettings().main.mediaServerType !== MediaServerType.JELLYFIN) {
+    return null;
+  }
+
+  try {
+    const jellyfinUser = await findJellyfinUserByName(preferredUsername);
+    if (!jellyfinUser) {
+      return null;
+    }
+    return await getRepository(User).findOne({
+      where: { jellyfinUserId: jellyfinUser.Id },
+    });
+  } catch (error) {
+    logger.error(
+      'Failed to look up an existing user by Jellyfin account; falling back to signup',
+      {
+        label: 'Auth',
+        preferredUsername,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    );
+    return null;
+  }
+}
+
+/**
  * Auto-links a newly created OIDC user to their Jellyfin account by
  * preferred_username, mirroring what the manual Quick Connect linking flow
  * does (docs/auth.md) but skipping the user-initiated code-approval step.
@@ -93,21 +154,7 @@ async function autoLinkJellyfinAccount(
 
   try {
     const userRepository = getRepository(User);
-    const admin = await userRepository.findOneOrFail({
-      where: { id: 1 },
-      select: ['id', 'jellyfinDeviceId', 'jellyfinUserId'],
-      order: { id: 'ASC' },
-    });
-
-    const jellyfinClient = new JellyfinAPI(
-      getHostname(),
-      settings.jellyfin.apiKey,
-      admin.jellyfinDeviceId ?? ''
-    );
-    jellyfinClient.setUserId(admin.jellyfinUserId ?? '');
-
-    const { users } = await jellyfinClient.getUsers();
-    const jellyfinUser = users.find((u) => u.Name === preferredUsername);
+    const jellyfinUser = await findJellyfinUserByName(preferredUsername);
 
     if (!jellyfinUser) {
       logger.info(
@@ -1317,6 +1364,30 @@ authRoutes.post(
       }
 
       return res.sendStatus(204);
+    }
+
+    // Link to an existing user who already owns the matching Jellyfin account
+    if (!user && provider.newUserLogin && fullUserInfo.preferred_username) {
+      const existingUser = await findUserByJellyfinUsername(
+        fullUserInfo.preferred_username
+      );
+
+      if (existingUser) {
+        await linkedAccountsRepository.save(
+          new LinkedAccount({
+            user: existingUser,
+            provider: provider.slug,
+            sub: fullUserInfo.sub,
+            username: fullUserInfo.preferred_username,
+          })
+        );
+        logger.info('Linked OIDC account to existing Jellyfin-linked user', {
+          label: 'Auth',
+          userId: existingUser.id,
+          provider: provider.slug,
+        });
+        user = existingUser;
+      }
     }
 
     // Create user if one doesn't already exist

@@ -1373,9 +1373,9 @@ describe('OpenID Connect', () => {
       assert.strictEqual(createdUser.jellyfinUserId, null);
     });
 
-    it('does not steal a Jellyfin account already linked to a different Seerr user', async function () {
+    it('signs in as the existing user who already owns the matching Jellyfin account', async function () {
       const userRepo = getRepository(User);
-      await userRepo.save(
+      const existingUser = await userRepo.save(
         new User({
           email: 'already-linked@seerr.dev',
           jellyfinUsername: 'jellyfinlinkable',
@@ -1403,11 +1403,16 @@ describe('OpenID Connect', () => {
 
       assert.strictEqual(response.status, 204);
 
-      const createdUser = await userRepo.findOneOrFail({
-        where: { email: JELLYFIN_CLAIMS.email },
-        select: ['id', 'jellyfinUserId'],
+      // No duplicate account; the OIDC identity is linked to the existing user
+      assert.strictEqual(
+        await userRepo.exist({ where: { email: JELLYFIN_CLAIMS.email } }),
+        false
+      );
+      const link = await getRepository(LinkedAccount).findOneOrFail({
+        relations: { user: true },
+        where: { provider: 'test', sub: JELLYFIN_CLAIMS.sub },
       });
-      assert.strictEqual(createdUser.jellyfinUserId, null);
+      assert.strictEqual(link.user.id, existingUser.id);
     });
 
     it('does not attempt to link when the media server is not Jellyfin', async function () {
