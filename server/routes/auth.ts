@@ -123,7 +123,7 @@ async function findUserByJellyfinUsername(
 }
 
 /**
- * Auto-links a newly created OIDC user to their Jellyfin account by
+ * Auto-links an unlinked OIDC user to their Jellyfin account by
  * preferred_username, mirroring what the manual Quick Connect linking flow
  * does (docs/auth.md) but skipping the user-initiated code-approval step.
  * The match key is preferred_username: Jellyfin's SSO plugin sets
@@ -132,8 +132,8 @@ async function findUserByJellyfinUsername(
  *
  * Jellyfin's SSO plugin only provisions an account lazily, on that user's
  * first Jellyfin login. If Seerr is their first stop, there's no Jellyfin
- * account yet to match -- fail gracefully and leave the manual Quick
- * Connect flow as the fallback.
+ * account yet to match -- fail gracefully and try again on their next OIDC
+ * sign-in, by which point they've usually opened Jellyfin.
  *
  * No backfill needed once linked: the Jellyfin Enhanced plugin proxies
  * every Seerr call live, server-side, per request (it's not a batch job
@@ -1433,10 +1433,6 @@ authRoutes.post(
 
       user.linkedAccounts = [linkedAccount];
       await userRepository.save(user);
-
-      if (fullUserInfo.preferred_username) {
-        await autoLinkJellyfinAccount(user, fullUserInfo.preferred_username);
-      }
     }
 
     if (!user) {
@@ -1451,6 +1447,12 @@ authRoutes.post(
           ? ApiErrorCode.OidcMissingEmail
           : ApiErrorCode.Unauthorized,
       });
+    }
+
+    // Retried on every sign-in, not just signup, so someone who opened
+    // Seerr before Jellyfin gets linked once their Jellyfin account exists
+    if (!user.jellyfinUserId && fullUserInfo.preferred_username) {
+      await autoLinkJellyfinAccount(user, fullUserInfo.preferred_username);
     }
 
     // Set logged in session and return

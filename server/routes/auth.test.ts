@@ -1424,6 +1424,34 @@ describe('OpenID Connect', () => {
       assert.strictEqual(response.status, 204);
       assert.strictEqual(getUsersMock.mock.callCount(), 0);
     });
+
+    it('links an unlinked user on a later sign-in once their Jellyfin account exists', async function () {
+      // First sign-in: Seerr before Jellyfin, nothing to link to yet
+      assert.strictEqual((await performOidcCallback()).status, 204);
+
+      getUsersMock.mock.mockImplementation(async () => ({
+        users: [
+          {
+            Id: 'jf-auto-link-001',
+            Name: 'jellyfinlinkable',
+            ServerId: 'server-1',
+            ServerName: 'Test Server',
+            Configuration: { GroupedFolders: [] },
+            Policy: { IsAdministrator: false },
+          },
+        ],
+      }));
+
+      const response = await performOidcCallback();
+
+      assert.strictEqual(response.status, 204);
+
+      const user = await getRepository(User).findOneOrFail({
+        where: { email: JELLYFIN_CLAIMS.email },
+        select: ['id', 'jellyfinUserId'],
+      });
+      assert.strictEqual(user.jellyfinUserId, 'jf-auto-link-001');
+    });
   });
 
   describe('error handling', function () {
