@@ -19,20 +19,20 @@ concurrency:
 jobs:
   semantic-title:
     name: Validate PR Title
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       pull-requests: write
       checks: write
       issues: write
     steps:
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+      - uses: amannn/action-semantic-pull-request@v6.1.1
         id: lint_pr_title
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - parallel:
-          - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+          - uses: actions/github-script@v9.0.0
             if: always() && steps.lint_pr_title.outputs.error_message != null
             env:
               ERROR_MESSAGE: ${{ steps.lint_pr_title.outputs.error_message }}
@@ -80,7 +80,7 @@ jobs:
                   });
                 }
 
-          - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+          - uses: actions/github-script@v9.0.0
             if: always() && steps.lint_pr_title.outputs.error_message == null
             with:
               github-token: ${{ secrets.GITHUB_TOKEN }}
