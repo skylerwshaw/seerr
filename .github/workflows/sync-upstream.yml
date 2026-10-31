@@ -55,7 +55,9 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         working-directory: seerr
         run: |
+          # Current Dockerfile frontend for COPY --exclude, without editing the Dockerfile.
           docker build --platform linux/amd64 \
+            --build-arg BUILDKIT_SYNTAX=docker/dockerfile:1 \
             --build-arg COMMIT_TAG="$(git rev-parse HEAD)" \
             --build-arg SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)" \
             .
