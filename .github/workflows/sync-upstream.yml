@@ -1,0 +1,68 @@
+---
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+# Fork only. Merges seerr-team/seerr develop into this fork's develop.
+# The push uses SYNC_TOKEN (fine-grained PAT: Contents + Workflows read/write on
+# this repo) because GITHUB_TOKEN can't push upstream's workflow file changes and
+# its pushes don't trigger other workflows. The push then fires ci.yml, which
+# publishes ghcr.io/skylerwshaw/seerr:develop.
+# Only run: steps, so actions.lock needs no entry for this file.
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream develop
+    runs-on: ubuntu-24.04
+    env:
+      REPO: ${{ github.repository }}
+      SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+    steps:
+      - name: Merge
+        id: merge
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::SYNC_TOKEN secret is not set"
+            exit 1
+          fi
+          git clone --branch develop "https://github.com/${REPO}.git" seerr
+          cd seerr
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898283+github-actions[bot]@users.noreply.github.com'
+          git fetch https://github.com/seerr-team/seerr.git develop
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "Already up to date with upstream."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git merge --no-edit -m 'chore: merge upstream develop' FETCH_HEAD; then
+            echo "::error::Upstream merge conflicts, resolve by hand: $(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (gate, not pushed)
+        if: steps.merge.outputs.changed == 'true'
+        working-directory: seerr
+        run: |
+          # Current Dockerfile frontend for COPY --exclude, without editing the Dockerfile.
+          docker build --platform linux/amd64 \
+            --build-arg BUILDKIT_SYNTAX=docker/dockerfile:1 \
+            --build-arg COMMIT_TAG="$(git rev-parse HEAD)" \
+            --build-arg SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)" \
+            .
+
+      - name: Push develop
+        if: steps.merge.outputs.changed == 'true'
+        working-directory: seerr
+        run: git push "https://x-access-token:${SYNC_TOKEN}@github.com/${REPO}.git" HEAD:develop
