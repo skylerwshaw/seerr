@@ -19,7 +19,7 @@ import {
 } from '@app/utils/oidc';
 import PlexOAuth from '@app/utils/plex';
 import { TrashIcon } from '@heroicons/react/24/solid';
-import { MediaServerType } from '@server/constants/server';
+import { MediaServerType, ServerType } from '@server/constants/server';
 import type {
   UserSettingsLinkedAccount,
   UserSettingsLinkedAccountResponse,
@@ -50,23 +50,15 @@ const messages = defineMessages(
 
 const plexOAuth = new PlexOAuth();
 
-enum LinkedAccountType {
-  Plex = 'Plex',
-  Jellyfin = 'Jellyfin',
-  Emby = 'Emby',
-  OpenIdConnect = 'oidc',
-}
+const OIDC_ACCOUNT_TYPE = 'oidc' as const;
 
 type LinkedAccount =
   | {
-      type:
-        | LinkedAccountType.Plex
-        | LinkedAccountType.Emby
-        | LinkedAccountType.Jellyfin;
+      type: ServerType;
       username: string;
     }
   | ({
-      type: LinkedAccountType.OpenIdConnect;
+      type: typeof OIDC_ACCOUNT_TYPE;
     } & UserSettingsLinkedAccount);
 
 const UserLinkedAccountsSettings = () => {
@@ -126,23 +118,23 @@ const UserLinkedAccountsSettings = () => {
   const accounts: LinkedAccount[] = useMemo(() => {
     const accounts: LinkedAccount[] =
       linkedOidcAccounts?.map((a) => ({
-        type: LinkedAccountType.OpenIdConnect,
+        type: OIDC_ACCOUNT_TYPE,
         ...a,
       })) ?? [];
     if (!user) return accounts;
     if (user.userType === UserType.PLEX && user.plexUsername)
       accounts.push({
-        type: LinkedAccountType.Plex,
+        type: ServerType.PLEX,
         username: user.plexUsername,
       });
     if (user.userType === UserType.EMBY && user.jellyfinUsername)
       accounts.push({
-        type: LinkedAccountType.Emby,
+        type: ServerType.EMBY,
         username: user.jellyfinUsername,
       });
     if (user.userType === UserType.JELLYFIN && user.jellyfinUsername)
       accounts.push({
-        type: LinkedAccountType.Jellyfin,
+        type: ServerType.JELLYFIN,
         username: user.jellyfinUsername,
       });
     return accounts;
@@ -177,28 +169,28 @@ const UserLinkedAccountsSettings = () => {
 
   const linkable = [
     {
-      name: 'Plex',
+      name: ServerType.PLEX,
       action: () => {
         plexOAuth.preparePopup();
         setTimeout(() => linkPlexAccount(), 1500);
       },
       hide:
         settings.currentSettings.mediaServerType !== MediaServerType.PLEX ||
-        accounts.some((a) => a.type === LinkedAccountType.Plex),
+        accounts.some((a) => a.type === ServerType.PLEX),
     },
     {
-      name: 'Jellyfin',
+      name: ServerType.JELLYFIN,
       action: () => setShowJellyfinModal(true),
       hide:
         settings.currentSettings.mediaServerType !== MediaServerType.JELLYFIN ||
-        accounts.some((a) => a.type === LinkedAccountType.Jellyfin),
+        accounts.some((a) => a.type === ServerType.JELLYFIN),
     },
     {
-      name: 'Emby',
+      name: ServerType.EMBY,
       action: () => setShowJellyfinModal(true),
       hide:
         settings.currentSettings.mediaServerType !== MediaServerType.EMBY ||
-        accounts.some((a) => a.type === LinkedAccountType.Emby),
+        accounts.some((a) => a.type === ServerType.EMBY),
     },
     ...settings.currentSettings.openIdProviders.map((p) => ({
       name: p.name,
@@ -213,9 +205,7 @@ const UserLinkedAccountsSettings = () => {
         }
       },
       hide: accounts.some(
-        (a) =>
-          a.type === LinkedAccountType.OpenIdConnect &&
-          a.provider.slug === p.slug
+        (a) => a.type === OIDC_ACCOUNT_TYPE && a.provider.slug === p.slug
       ),
     })),
   ].filter((l) => !l.hide);
@@ -298,15 +288,15 @@ const UserLinkedAccountsSettings = () => {
               className="flex items-center gap-4 overflow-hidden rounded-lg bg-gray-800/50 px-4 py-5 shadow ring-1 ring-gray-700 sm:p-6"
             >
               <div className="w-12">
-                {acct.type === LinkedAccountType.Plex ? (
+                {acct.type === ServerType.PLEX ? (
                   <div className="flex aspect-square h-full items-center justify-center rounded-full bg-neutral-800">
                     <PlexLogo className="w-9" />
                   </div>
-                ) : acct.type === LinkedAccountType.Emby ? (
+                ) : acct.type === ServerType.EMBY ? (
                   <EmbyLogo />
-                ) : acct.type === LinkedAccountType.Jellyfin ? (
+                ) : acct.type === ServerType.JELLYFIN ? (
                   <JellyfinLogo />
-                ) : acct.type === LinkedAccountType.OpenIdConnect ? (
+                ) : acct.type === OIDC_ACCOUNT_TYPE ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={acct.provider.logo || '/images/openid.svg'}
@@ -316,7 +306,7 @@ const UserLinkedAccountsSettings = () => {
               </div>
               <div>
                 <div className="truncate text-sm font-bold text-gray-300">
-                  {acct.type === LinkedAccountType.OpenIdConnect
+                  {acct.type === OIDC_ACCOUNT_TYPE
                     ? acct.provider.name
                     : acct.type}
                 </div>
@@ -325,15 +315,15 @@ const UserLinkedAccountsSettings = () => {
                 </div>
               </div>
               <div className="flex-grow" />
-              {(acct.type === LinkedAccountType.OpenIdConnect
+              {(acct.type === OIDC_ACCOUNT_TYPE
                 ? canUnlink
                 : canUnlinkMediaServer) && (
                 <ConfirmButton
                   onClick={() => {
                     deleteRequest(
-                      acct.type === LinkedAccountType.OpenIdConnect
+                      acct.type === OIDC_ACCOUNT_TYPE
                         ? String(acct.id)
-                        : acct.type === LinkedAccountType.Plex
+                        : acct.type === ServerType.PLEX
                           ? 'plex'
                           : 'jellyfin'
                     );

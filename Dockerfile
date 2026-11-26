@@ -7,7 +7,7 @@ ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
 
-COPY . ./app
+COPY . /app
 WORKDIR /app
 
 FROM base AS prod-deps
@@ -25,10 +25,9 @@ ENV COMMIT_TAG=${COMMIT_TAG}
 
 RUN \
   case "${TARGETPLATFORM}" in \
-  'linux/arm64' | 'linux/arm/v7') \
+  'linux/arm64') \
   apk update && \
-  apk add --no-cache python3 make g++ gcc libc6-compat bash && \
-  npm install --global node-gyp \
+  apk add --no-cache python3 make g++ gcc libc6-compat bash \
   ;; \
   esac
 
@@ -44,7 +43,7 @@ ARG COMMIT_TAG
 ENV NODE_ENV=production
 ENV COMMIT_TAG=${COMMIT_TAG}
 
-RUN apk add --no-cache tzdata
+RUN apk add --no-cache tzdata && mkdir -p /app && chown node:node /app
 
 USER node:node
 
